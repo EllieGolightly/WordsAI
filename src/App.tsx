@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Route, Routes } from 'react-router-dom'
+import { Route, Routes, useNavigate } from 'react-router-dom'
 import { BottomNav } from './components/BottomNav'
 import { buildMarkdownSummary, generateFallbackSummary } from './lib/ai'
 import {
   addWordToToday,
   defaultSettings,
   ensureWordExamples,
+  extendTodayPlan,
   exportProgress,
   getLibraryWords,
   getPersistentStorageSupport,
@@ -35,6 +36,7 @@ import { StatsPage } from './pages/StatsPage'
 import { TodayPage } from './pages/TodayPage'
 
 function App() {
+  const navigate = useNavigate()
   const [today, setToday] = useState<TodaySnapshot | null>(null)
   const [deck, setDeck] = useState<ReviewDeckItem[]>([])
   const [stats, setStats] = useState<StatsSnapshot | null>(null)
@@ -69,8 +71,8 @@ function App() {
   const loadDashboard = useCallback(async () => {
     setLoading(true)
     try {
-      const [todaySnapshot, reviewDeck, statsSnapshot, settingsSnapshot, storageSupport] = await Promise.all([
-        getTodaySnapshot(),
+      const todaySnapshot = await getTodaySnapshot()
+      const [reviewDeck, statsSnapshot, settingsSnapshot, storageSupport] = await Promise.all([
         getReviewDeck(),
         getStatsSnapshot(),
         getSettings(),
@@ -126,6 +128,30 @@ function App() {
     try {
       await submitReview(wordId, grade)
       await refreshAll()
+    } finally {
+      setBusyLabel('')
+    }
+  }
+
+  const onStartReview = async () => {
+    setBusyLabel('准备中')
+    try {
+      if (deck.length === 0) {
+        await extendTodayPlan()
+        await refreshAll()
+      }
+      navigate('/review')
+    } finally {
+      setBusyLabel('')
+    }
+  }
+
+  const onLoadMoreWords = async () => {
+    setBusyLabel('准备新词')
+    try {
+      await extendTodayPlan()
+      await refreshAll()
+      showToast('已准备新词')
     } finally {
       setBusyLabel('')
     }
@@ -235,6 +261,7 @@ function App() {
                 today={today}
                 summaryPayload={summaryPayload as AiContentPayload | null}
                 onCopySummary={onCopySummary}
+                onStartReview={onStartReview}
               />
             }
           />
@@ -245,6 +272,7 @@ function App() {
                 deck={deck}
                 onReview={onReview}
                 onEnsureExamples={onEnsureExamples}
+                onLoadMoreWords={onLoadMoreWords}
               />
             }
           />

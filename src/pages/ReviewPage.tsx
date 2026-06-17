@@ -6,10 +6,12 @@ export function ReviewPage({
   deck,
   onReview,
   onEnsureExamples,
+  onLoadMoreWords,
 }: {
   deck: ReviewDeckItem[]
   onReview: (wordId: string, grade: 'again' | 'good') => void
   onEnsureExamples: (wordId: string) => Promise<string[]>
+  onLoadMoreWords: () => Promise<void>
 }) {
   const [index, setIndex] = useState(0)
   const [revealed, setRevealed] = useState(false)
@@ -41,7 +43,7 @@ export function ReviewPage({
     if (!current) return
     await onReview(current.word.id, grade)
     setRevealed(false)
-    setIndex((prev) => Math.min(prev + 1, deck.length))
+    setIndex(0)
   }
 
   const toggleReveal = async () => {
@@ -76,7 +78,9 @@ export function ReviewPage({
       <section className="empty-state">
         <p className="eyebrow">Review</p>
         <h2>今天已经背完了</h2>
-        <p>可以去统计页看看节奏，或者从词库手动加入几个词。</p>
+        <button className="primary-action compact-action" onClick={() => void onLoadMoreWords()}>
+          继续背词
+        </button>
       </section>
     )
   }

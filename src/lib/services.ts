@@ -123,29 +123,29 @@ const getRecentWeakWordIds = async (limit = 6) => {
     .map(([wordId]) => wordId)
 }
 
-export const ensureTodayPlan = async (date = new Date()) => {
-  const dateKey = formatDateKey(date)
-  const existing = await db.dailyPlans.get(dateKey)
-  if (existing) return existing
-
-  const settings = await getSettings()
+const createNewWordBatch = async (
+  settings: AppSettings,
+  count: number,
+  excludeWordIds: Set<string>,
+  weakWordIds: string[],
+) => {
   const cards = await db.cards.toArray()
   const learnedIds = new Set(cards.map((card) => card.wordId))
   const words = await db.words.orderBy('frq').toArray()
   const filteredWords = await getFilteredWords(settings)
   const allowedIds = new Set(filteredWords.map((word) => word.id))
-  const dueWordIds = cards.filter((card) => new Date(card.dueAt) <= date).map((card) => card.wordId)
-  const weakWordIds = (await getRecentWeakWordIds()).filter((wordId) => learnedIds.has(wordId))
+  const target = Math.max(0, Math.floor(count))
 
   const localNewWordIds = words
     .filter((word) => !learnedIds.has(word.id))
+    .filter((word) => !excludeWordIds.has(word.id))
     .filter((word) => allowedIds.has(word.id))
-    .slice(0, Math.max(0, Math.floor(settings.newWordsPerDay)))
+    .slice(0, target)
     .map((word) => word.id)
 
   let generatedWordIds: string[] = []
   let source: DailyPlan['source'] = 'local'
-  const aiTarget = Math.max(0, Math.floor(settings.newWordsPerDay))
+  const aiTarget = target
 
   if (settings.aiEnabled && settings.aiApiKey.trim() && aiTarget > 0) {
     try {
@@ -162,6 +162,7 @@ export const ensureTodayPlan = async (date = new Date()) => {
       const existingWordNames = new Set(words.map((word) => word.word.toLowerCase()))
       const normalized = generatedWords
         .filter((word) => !existingWordNames.has(word.word.trim().toLowerCase()))
+        .filter((word) => !excludeWordIds.has(buildAiWordId(word.word)))
         .map((word) => ({
           id: buildAiWordId(word.word),
           word: word.word.trim(),
@@ -189,21 +190,80 @@ export const ensureTodayPlan = async (date = new Date()) => {
     }
   }
 
-  const newWordIds = unique([...generatedWordIds, ...localNewWordIds]).slice(
-    0,
-    Math.max(0, Math.floor(settings.newWordsPerDay)),
-  )
+  const newWordIds = unique([...generatedWordIds, ...localNewWordIds]).slice(0, target)
+
+  return { newWordIds, source }
+}
+
+export const ensureTodayPlan = async (date = new Date()) => {
+  const dateKey = formatDateKey(date)
+  const settings = await getSettings()
+  const cards = await db.cards.toArray()
+  const learnedIds = new Set(cards.map((card) => card.wordId))
+  const dueWordIds = cards.filter((card) => new Date(card.dueAt) <= date).map((card) => card.wordId)
+  const weakWordIds = (await getRecentWeakWordIds()).filter((wordId) => learnedIds.has(wordId))
+  const target = Math.max(0, Math.floor(settings.newWordsPerDay))
+
+  const existing = await db.dailyPlans.get(dateKey)
+  if (existing) {
+    const existingNewWordIds = unique(existing.newWordIds)
+    const missingCount = Math.max(0, target - existingNewWordIds.length)
+    const batch =
+      missingCount > 0
+        ? await createNewWordBatch(settings, missingCount, new Set([...existingNewWordIds, ...learnedIds]), weakWordIds)
+        : { newWordIds: [], source: existing.source ?? 'local' }
+
+    const plan: DailyPlan = {
+      ...existing,
+      newWordIds: unique([...existingNewWordIds, ...batch.newWordIds]),
+      dueWordIds,
+      weakWordIds,
+      source:
+        batch.newWordIds.length === 0
+          ? existing.source
+          : existing.source === 'ai' && batch.source === 'ai'
+            ? 'ai'
+            : 'mixed',
+    }
+
+    await db.dailyPlans.put(plan)
+    return plan
+  }
+
+  const batch = await createNewWordBatch(settings, target, learnedIds, weakWordIds)
 
   const plan: DailyPlan = {
     dateKey,
-    newWordIds,
+    newWordIds: batch.newWordIds,
     dueWordIds,
     weakWordIds,
-    source,
+    source: batch.source,
     generatedAt: new Date().toISOString(),
   }
   await db.dailyPlans.put(plan)
   return plan
+}
+
+export const extendTodayPlan = async (date = new Date()) => {
+  const settings = await getSettings()
+  const plan = await ensureTodayPlan(date)
+  const cards = await db.cards.toArray()
+  const learnedIds = new Set(cards.map((card) => card.wordId))
+  const weakWordIds = plan.weakWordIds ?? []
+  const target = Math.max(1, Math.floor(settings.newWordsPerDay))
+  const batch = await createNewWordBatch(settings, target, new Set([...plan.newWordIds, ...learnedIds]), weakWordIds)
+
+  if (batch.newWordIds.length === 0) return plan
+
+  const nextPlan: DailyPlan = {
+    ...plan,
+    newWordIds: unique([...plan.newWordIds, ...batch.newWordIds]),
+    source: plan.source === 'ai' && batch.source === 'ai' ? 'ai' : 'mixed',
+    generatedAt: new Date().toISOString(),
+  }
+
+  await db.dailyPlans.put(nextPlan)
+  return nextPlan
 }
 
 export const getTodaySnapshot = async (date = new Date()): Promise<TodaySnapshot> => {
@@ -221,27 +281,37 @@ export const getTodaySnapshot = async (date = new Date()): Promise<TodaySnapshot
     db.aiContents.where('dateKey').equals(dateKey).sortBy('createdAt'),
   ])
 
+  const latestLogByWord = new Map<string, ReviewLog>()
+  logs
+    .slice()
+    .sort((a, b) => a.reviewedAt.localeCompare(b.reviewedAt))
+    .forEach((log) => latestLogByWord.set(log.wordId, log))
+  const reviewedTodayIds = new Set(latestLogByWord.keys())
   const wordMap = new Map(words.map((word) => [word.id, word]))
-  const dueCards = cards.filter((card) => new Date(card.dueAt) <= date)
+  const dueCards = cards.filter((card) => new Date(card.dueAt) <= date && !reviewedTodayIds.has(card.wordId))
   const dueWords = dueCards
     .map((card) => wordMap.get(card.wordId))
     .filter((item): item is WordEntry => Boolean(item))
 
-  const newWords = plan.newWordIds
+  const plannedNewWords = plan.newWordIds
     .map((id) => wordMap.get(id))
     .filter((item): item is WordEntry => Boolean(item))
+  const newWords = plannedNewWords.filter((word) => !reviewedTodayIds.has(word.id))
   const weakWords = (plan.weakWordIds ?? [])
+    .filter((id) => !reviewedTodayIds.has(id))
     .map((id) => wordMap.get(id))
     .filter((item): item is WordEntry => Boolean(item))
 
-  const completedTodayCount = logs.length
-  const rememberedTodayCount = logs.filter((item) => item.grade === 'good').length
+  const completedTodayCount = reviewedTodayIds.size
+  const rememberedTodayCount = [...latestLogByWord.values()].filter((item) => item.grade === 'good').length
   const newWordIdSet = new Set(plan.newWordIds)
-  const reviewedWords = unique(logs.map((log) => log.wordId))
+  const reviewedWords = unique([...reviewedTodayIds])
     .filter((id) => !newWordIdSet.has(id))
     .map((id) => wordMap.get(id))
     .filter((item): item is WordEntry => Boolean(item))
-  const wrongWords = unique(logs.filter((log) => log.grade === 'again').map((log) => log.wordId))
+  const wrongWords = [...latestLogByWord.values()]
+    .filter((log) => log.grade === 'again')
+    .map((log) => log.wordId)
     .map((id) => wordMap.get(id))
     .filter((item): item is WordEntry => Boolean(item))
 
@@ -250,6 +320,7 @@ export const getTodaySnapshot = async (date = new Date()): Promise<TodaySnapshot
     plan,
     dueCards,
     newWords,
+    plannedNewWords,
     dueWords,
     weakWords,
     reviewedWords,

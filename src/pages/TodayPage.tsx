@@ -1,20 +1,21 @@
 import { ClipboardCopy, Play } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
 import type { AiContentPayload, TodaySnapshot } from '../lib/types'
 
 export function TodayPage({
   today,
   summaryPayload,
   onCopySummary,
+  onStartReview,
 }: {
   today: TodaySnapshot | null
   summaryPayload: AiContentPayload | null
   onCopySummary: () => void
+  onStartReview: () => Promise<void>
 }) {
-  const navigate = useNavigate()
   if (!today) return null
 
-  const target = Math.max(today.newWords.length + today.dueWords.length, 1)
+  const remainingCount = today.newWords.length + today.dueWords.length + today.weakWords.length
+  const target = Math.max(today.completedTodayCount + remainingCount, 1)
   const completionRate = Math.min(100, Math.round((today.completedTodayCount / target) * 100))
   const rememberRate =
     today.completedTodayCount === 0 ? 0 : Math.round((today.rememberedTodayCount / today.completedTodayCount) * 100)
@@ -32,7 +33,7 @@ export function TodayPage({
             <span>新词</span>
           </article>
           <article>
-            <strong>{today.dueWords.length}</strong>
+            <strong>{today.dueWords.length + today.weakWords.length}</strong>
             <span>复习</span>
           </article>
           <article>
@@ -45,9 +46,9 @@ export function TodayPage({
           <span style={{ width: `${completionRate}%` }} />
         </div>
 
-        <button className="primary-action" onClick={() => void navigate('/review')}>
+        <button className="primary-action" onClick={() => void onStartReview()}>
           <Play size={18} />
-          {completionRate > 0 ? '继续背词' : '开始背词'}
+          {today.completedTodayCount > 0 ? '继续背词' : '开始背词'}
         </button>
       </section>
 

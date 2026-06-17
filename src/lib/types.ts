@@ -118,6 +118,7 @@ export type TodaySnapshot = {
   plan: DailyPlan
   dueCards: CardRecord[]
   newWords: WordEntry[]
+  plannedNewWords: WordEntry[]
   dueWords: WordEntry[]
   weakWords: WordEntry[]
   reviewedWords: WordEntry[]

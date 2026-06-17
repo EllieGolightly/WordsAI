@@ -101,7 +101,7 @@ export const generateFallbackSummary = (snapshot: TodaySnapshot): AiContentPaylo
         ? '今天还没有留下答题记录。等做完一轮后，小结才会更像你真实的学习状态。'
         : `今天记住了 ${remembered} 个判断，漏掉了 ${wrongNames.join('、') || '不多'}，整体记住率约 ${rememberRate}%。如果明天时间紧，先回看这些刚刚卡住的词，比继续加新词更稳。`,
     highlights: [
-      `今日新词 ${snapshot.newWords.length} 个`,
+      `今日新词 ${snapshot.plannedNewWords.length} 个`,
       `待复习词 ${snapshot.dueWords.length} 个`,
       `补弱词 ${snapshot.weakWords.length} 个`,
       studied === 0 ? '尚未形成学习记录' : `完成复习 ${studied} 次`,
@@ -111,7 +111,7 @@ export const generateFallbackSummary = (snapshot: TodaySnapshot): AiContentPaylo
       '保持同一时段打开应用，减少中断',
       '对今天仍模糊的词，再看一遍中文释义和记忆提示',
     ],
-    entries: snapshot.newWords.map((word) => ({
+    entries: snapshot.plannedNewWords.map((word) => ({
       wordId: word.id,
       memoryHint: word.memoryHint ?? `${word.word} 的核心意思是“${word.cn}”，先记中文主干，再结合场景理解。`,
       examples: word.examples ?? [],
@@ -133,7 +133,7 @@ export const generateAiSummary = async (
   }
 
   const payload = {
-    new_words: formatSummaryWords(snapshot.newWords),
+    new_words: formatSummaryWords(snapshot.plannedNewWords),
     review_words: formatSummaryWords(snapshot.reviewedWords),
     correct: snapshot.rememberedTodayCount,
     wrong: Math.max(0, snapshot.completedTodayCount - snapshot.rememberedTodayCount),

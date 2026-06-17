@@ -42,11 +42,13 @@
 html,
 body,
 #root {
-  min-height: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
   margin: 0;
+  overscroll-behavior: none;
   background:
     radial-gradient(circle at 18% 0%, rgba(255, 255, 255, 0.66), transparent 34%),
     linear-gradient(155deg, #faf6ef 0%, #f2eadf 48%, #ebe0d3 100%);
@@ -89,16 +91,16 @@ select {
 
 .app-shell {
   width: min(100%, 740px);
-  min-height: 100svh;
+  height: 100svh;
   margin: 0 auto;
   display: grid;
   grid-template-rows: auto auto 1fr auto;
+  overflow: hidden;
   background: transparent;
 }
 
 .topbar {
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 10;
   display: flex;
   align-items: center;
@@ -163,8 +165,10 @@ select {
 
 .page-viewport {
   min-height: 0;
-  overflow: auto;
-  padding: 18px 22px 92px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 18px 22px;
 }
 
 .page-stack {
@@ -304,6 +308,11 @@ select {
   background: rgba(255, 252, 247, 0.54);
   border: 1px solid var(--line-strong);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.compact-action {
+  width: min(100%, 220px);
+  margin-top: 16px;
 }
 
 .secondary-action {
@@ -966,8 +975,7 @@ select {
 }
 
 .bottom-nav {
-  position: sticky;
-  bottom: 0;
+  position: relative;
   z-index: 20;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
