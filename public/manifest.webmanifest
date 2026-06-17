@@ -1,0 +1,19 @@
+{
+  "name": "记忆温室",
+  "short_name": "记忆温室",
+  "description": "离线优先的手机背单词工具，支持 AI 例句、今日小结与记忆曲线调度。",
+  "theme_color": "#f4efe6",
+  "background_color": "#f7f3eb",
+  "lang": "zh-CN",
+  "display": "standalone",
+  "orientation": "portrait",
+  "start_url": "/",
+  "icons": [
+    {
+      "src": "/pwa-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
