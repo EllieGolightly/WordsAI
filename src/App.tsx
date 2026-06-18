@@ -18,6 +18,7 @@ import {
   requestPersistentStorage,
   saveSettings,
   submitReview,
+  syncTodayNewWordTarget,
   testAiSettings,
 } from './lib/services'
 import type {
@@ -54,6 +55,7 @@ function App() {
   const [needRefresh, setNeedRefresh] = useState(false)
   const [storageInfo, setStorageInfo] = useState({ supported: false, persisted: false })
   const toastTimer = useRef<number | undefined>(undefined)
+  const settingsSaveQueue = useRef<Promise<void>>(Promise.resolve())
 
   const showToast = useCallback((message: string) => {
     setToast(message)
@@ -137,8 +139,13 @@ function App() {
     setBusyLabel('准备中')
     try {
       if (deck.length === 0) {
-        await extendTodayPlan()
+        const result = await extendTodayPlan()
         await refreshAll()
+        if (result.addedCount > 0) {
+          showToast(`已准备 ${result.addedCount} 个新词`)
+        } else {
+          showToast(result.error || '暂时没有生成新词，请检查 AI 设置')
+        }
       }
       navigate('/review')
     } finally {
@@ -149,9 +156,13 @@ function App() {
   const onLoadMoreWords = async () => {
     setBusyLabel('准备新词')
     try {
-      await extendTodayPlan()
+      const result = await extendTodayPlan()
       await refreshAll()
-      showToast('已准备新词')
+      if (result.addedCount > 0) {
+        showToast(`已准备 ${result.addedCount} 个新词`)
+      } else {
+        showToast(result.error || '暂时没有生成新词，请检查 AI 设置')
+      }
     } finally {
       setBusyLabel('')
     }
@@ -163,16 +174,30 @@ function App() {
     showToast('已复制')
   }
 
-  const onSaveSettings = async (partial: Partial<AppSettings>) => {
-    setBusyLabel('保存中')
-    try {
-      const next = await saveSettings(partial)
-      setSettings(next)
-      await refreshAll()
-      showToast('设置已保存')
-    } finally {
-      setBusyLabel('')
-    }
+  const onSaveSettings = (partial: Partial<AppSettings>) => {
+    const task = settingsSaveQueue.current.then(async () => {
+      setBusyLabel('保存中…')
+      try {
+        const previous = await getSettings()
+        const next = await saveSettings(partial)
+        setSettings(next)
+
+        if (previous.newWordsPerDay !== next.newWordsPerDay) {
+          const result = await syncTodayNewWordTarget()
+          await refreshAll()
+          if (result.remainingCount < result.requestedCount) {
+            showToast(result.error || `当前准备了 ${result.remainingCount} 个新词`)
+          }
+        }
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '设置保存失败')
+      } finally {
+        setBusyLabel('')
+      }
+    })
+
+    settingsSaveQueue.current = task.catch(() => undefined)
+    return task
   }
 
   const onTestAi = async (draft: AppSettings) => {
@@ -294,7 +319,6 @@ function App() {
             path="/settings"
             element={
               <SettingsPage
-                key={JSON.stringify(settings)}
                 settings={settings}
                 storageInfo={storageInfo}
                 summaryPreview={summaryPayload?.markdown ?? ''}

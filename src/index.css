@@ -949,10 +949,11 @@ select {
   cursor: pointer;
 }
 
-.sticky-save {
-  position: sticky;
-  bottom: 8px;
-  z-index: 4;
+.autosave-status {
+  margin: -2px 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
 }
 
 .empty-state {

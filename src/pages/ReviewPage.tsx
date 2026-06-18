@@ -1,5 +1,5 @@
 import { Check, Volume2, X } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReviewDeckItem } from '../lib/types'
 
 export function ReviewPage({
@@ -13,15 +13,26 @@ export function ReviewPage({
   onEnsureExamples: (wordId: string) => Promise<string[]>
   onLoadMoreWords: () => Promise<void>
 }) {
-  const [index, setIndex] = useState(0)
+  const [sessionTotal, setSessionTotal] = useState(deck.length)
+  const [completedInSession, setCompletedInSession] = useState(0)
+  const previousDeckLength = useRef(deck.length)
   const [revealed, setRevealed] = useState(false)
   const [loadingExamplesFor, setLoadingExamplesFor] = useState<string | null>(null)
   const [exampleErrors, setExampleErrors] = useState<Record<string, string>>({})
   const [generatedExamples, setGeneratedExamples] = useState<Record<string, string[]>>({})
 
-  const currentIndex = deck.length === 0 ? 0 : Math.min(index, deck.length - 1)
-  const current = deck[currentIndex]
-  const progress = deck.length === 0 ? 100 : Math.round(((currentIndex + 1) / deck.length) * 100)
+  const current = deck[0]
+  const currentPosition = Math.min(completedInSession + 1, Math.max(sessionTotal, 1))
+  const progress = sessionTotal === 0 ? 100 : Math.round((currentPosition / sessionTotal) * 100)
+
+  useEffect(() => {
+    const previousLength = previousDeckLength.current
+    if (deck.length > 0 && (previousLength === 0 || deck.length > previousLength)) {
+      setSessionTotal(deck.length)
+      setCompletedInSession(0)
+    }
+    previousDeckLength.current = deck.length
+  }, [deck.length])
 
   const examples = useMemo(() => {
     if (!current) return []
@@ -43,7 +54,7 @@ export function ReviewPage({
     if (!current) return
     await onReview(current.word.id, grade)
     setRevealed(false)
-    setIndex(0)
+    setCompletedInSession((count) => Math.min(sessionTotal, count + 1))
   }
 
   const toggleReveal = async () => {
@@ -89,7 +100,7 @@ export function ReviewPage({
     <div className="review-layout">
       <div className="review-topline">
         <span>
-          {currentIndex + 1} / {deck.length}
+          {currentPosition} / {sessionTotal}
         </span>
         <div className="review-progress">
           <span style={{ width: `${progress}%` }} />

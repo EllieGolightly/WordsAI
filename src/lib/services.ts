@@ -39,12 +39,30 @@ export const defaultSettings: AppSettings = {
   aiApiKey: '',
 }
 
-export const formatDateKey = (date = new Date()) => date.toISOString().slice(0, 10)
+export const formatDateKey = (date = new Date()) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
 
 const startOfDay = (date = new Date()) => {
   const copy = new Date(date)
   copy.setHours(0, 0, 0, 0)
   return copy
+}
+
+const endOfDay = (date = new Date()) => {
+  const copy = startOfDay(date)
+  copy.setDate(copy.getDate() + 1)
+  return copy
+}
+
+const getReviewedWordIdsForDay = async (date = new Date()) => {
+  const from = startOfDay(date).toISOString()
+  const to = endOfDay(date).toISOString()
+  const logs = await db.reviewLogs.filter((log) => log.reviewedAt >= from && log.reviewedAt < to).toArray()
+  return new Set(logs.map((log) => log.wordId))
 }
 
 const unique = <T,>(items: T[]) => [...new Set(items)]
@@ -145,6 +163,7 @@ const createNewWordBatch = async (
 
   let generatedWordIds: string[] = []
   let source: DailyPlan['source'] = 'local'
+  let aiError = ''
   const aiTarget = target
 
   if (settings.aiEnabled && settings.aiApiKey.trim() && aiTarget > 0) {
@@ -185,14 +204,15 @@ const createNewWordBatch = async (
         generatedWordIds = normalized.map((word) => word.id)
         source = localNewWordIds.length > generatedWordIds.length ? 'mixed' : 'ai'
       }
-    } catch {
+    } catch (error) {
       source = 'local'
+      aiError = error instanceof Error ? error.message : 'AI 生成失败'
     }
   }
 
   const newWordIds = unique([...generatedWordIds, ...localNewWordIds]).slice(0, target)
 
-  return { newWordIds, source }
+  return { newWordIds, source, aiError }
 }
 
 export const ensureTodayPlan = async (date = new Date()) => {
@@ -253,7 +273,14 @@ export const extendTodayPlan = async (date = new Date()) => {
   const target = Math.max(1, Math.floor(settings.newWordsPerDay))
   const batch = await createNewWordBatch(settings, target, new Set([...plan.newWordIds, ...learnedIds]), weakWordIds)
 
-  if (batch.newWordIds.length === 0) return plan
+  if (batch.newWordIds.length === 0) {
+    return {
+      plan,
+      addedCount: 0,
+      requestedCount: target,
+      error: batch.aiError,
+    }
+  }
 
   const nextPlan: DailyPlan = {
     ...plan,
@@ -263,7 +290,56 @@ export const extendTodayPlan = async (date = new Date()) => {
   }
 
   await db.dailyPlans.put(nextPlan)
-  return nextPlan
+  return {
+    plan: nextPlan,
+    addedCount: batch.newWordIds.length,
+    requestedCount: target,
+    error: batch.aiError,
+  }
+}
+
+export const syncTodayNewWordTarget = async (date = new Date()) => {
+  const settings = await getSettings()
+  const plan = await ensureTodayPlan(date)
+  const target = Math.max(0, Math.floor(settings.newWordsPerDay))
+  const reviewedTodayIds = await getReviewedWordIdsForDay(date)
+  const reviewedPlanIds = plan.newWordIds.filter((wordId) => reviewedTodayIds.has(wordId))
+  const remainingPlanIds = plan.newWordIds.filter((wordId) => !reviewedTodayIds.has(wordId))
+  const keptRemainingIds = remainingPlanIds.slice(0, target)
+  const missingCount = Math.max(0, target - keptRemainingIds.length)
+  const cards = await db.cards.toArray()
+  const learnedIds = new Set(cards.map((card) => card.wordId))
+  const batch =
+    missingCount > 0
+      ? await createNewWordBatch(
+          settings,
+          missingCount,
+          new Set([...plan.newWordIds, ...learnedIds]),
+          plan.weakWordIds ?? [],
+        )
+      : { newWordIds: [], source: plan.source ?? ('local' as const), aiError: '' }
+
+  const nextPlan: DailyPlan = {
+    ...plan,
+    newWordIds: unique([...reviewedPlanIds, ...keptRemainingIds, ...batch.newWordIds]),
+    source:
+      batch.newWordIds.length === 0
+        ? plan.source
+        : plan.source === 'ai' && batch.source === 'ai'
+          ? 'ai'
+          : 'mixed',
+    generatedAt: new Date().toISOString(),
+  }
+
+  await db.dailyPlans.put(nextPlan)
+
+  return {
+    plan: nextPlan,
+    requestedCount: target,
+    remainingCount: keptRemainingIds.length + batch.newWordIds.length,
+    addedCount: batch.newWordIds.length,
+    error: batch.aiError,
+  }
 }
 
 export const getTodaySnapshot = async (date = new Date()): Promise<TodaySnapshot> => {
@@ -272,12 +348,12 @@ export const getTodaySnapshot = async (date = new Date()): Promise<TodaySnapshot
   const dateKey = formatDateKey(date)
   const plan = await ensureTodayPlan(date)
   const todayStart = startOfDay(date).toISOString()
-  const nowIso = date.toISOString()
+  const tomorrowStart = endOfDay(date).toISOString()
 
   const [cards, words, logs, aiContents] = await Promise.all([
     db.cards.toArray(),
     db.words.toArray(),
-    db.reviewLogs.filter((log) => log.reviewedAt >= todayStart && log.reviewedAt <= nowIso).toArray(),
+    db.reviewLogs.filter((log) => log.reviewedAt >= todayStart && log.reviewedAt < tomorrowStart).toArray(),
     db.aiContents.where('dateKey').equals(dateKey).sortBy('createdAt'),
   ])
 
@@ -475,7 +551,7 @@ const buildRangeStats = async (days: number, label: string): Promise<RangeStats>
   const from = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString()
   const logs = await db.reviewLogs.filter((log) => log.reviewedAt >= from).toArray()
   const rememberedReviews = logs.filter((log) => log.grade === 'good').length
-  const activeDays = unique(logs.map((log) => log.reviewedAt.slice(0, 10))).length
+  const activeDays = unique(logs.map((log) => formatDateKey(new Date(log.reviewedAt)))).length
   const newCards = unique(
     logs
       .filter((log) => log.intervalDays <= 1)
@@ -505,7 +581,7 @@ const buildHeatmap = async (days = 35): Promise<HeatmapDay[]> => {
   }
 
   logs.forEach((log) => {
-    const dateKey = log.reviewedAt.slice(0, 10)
+    const dateKey = formatDateKey(new Date(log.reviewedAt))
     const item = byDate.get(dateKey)
     if (!item) return
     item.totalReviews += 1
@@ -553,27 +629,19 @@ const getDifficultWords = async (): Promise<DifficultWordStat[]> => {
 }
 
 const getStreakDays = async () => {
-  const logs = await db.reviewLogs.orderBy('reviewedAt').reverse().toArray()
-  const dates = unique(logs.map((log) => log.reviewedAt.slice(0, 10)))
-  if (dates.length === 0) return 0
+  const logs = await db.reviewLogs.toArray()
+  const activeDates = new Set(logs.map((log) => formatDateKey(new Date(log.reviewedAt))))
+  if (activeDates.size === 0) return 0
+
+  const cursor = startOfDay(new Date())
+  if (!activeDates.has(formatDateKey(cursor))) {
+    cursor.setDate(cursor.getDate() - 1)
+  }
 
   let streak = 0
-  let cursor = startOfDay(new Date())
-
-  for (const key of dates) {
-    const cursorKey = formatDateKey(cursor)
-    if (key === cursorKey) {
-      streak += 1
-      cursor = new Date(cursor.getTime() - 24 * 60 * 60 * 1000)
-      continue
-    }
-
-    if (streak === 0 && key === formatDateKey(new Date(cursor.getTime() - 24 * 60 * 60 * 1000))) {
-      streak += 1
-      cursor = new Date(cursor.getTime() - 48 * 60 * 60 * 1000)
-      continue
-    }
-    break
+  while (activeDates.has(formatDateKey(cursor))) {
+    streak += 1
+    cursor.setDate(cursor.getDate() - 1)
   }
 
   return streak

@@ -1,5 +1,5 @@
-import { Database, Download, Import, KeyRound, Save, TestTube2, Vault } from 'lucide-react'
-import { useState } from 'react'
+import { Database, Download, Import, KeyRound, TestTube2, Vault } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import type { AppSettings } from '../lib/types'
 
 export function SettingsPage({
@@ -19,13 +19,33 @@ export function SettingsPage({
   summaryPreview: string
   busyLabel: string
   aiTestResult: { status: 'idle' | 'testing' | 'ok' | 'error'; message: string }
-  onSave: (partial: Partial<AppSettings>) => void
+  onSave: (partial: Partial<AppSettings>) => void | Promise<void>
   onTestAi: (draft: AppSettings) => void
   onExport: () => void
   onImport: (file?: File | null) => void
   onRequestStorage: () => void
 }) {
   const [draft, setDraft] = useState(settings)
+  const [newWordsInput, setNewWordsInput] = useState(String(settings.newWordsPerDay))
+  const onSaveRef = useRef(onSave)
+  const didMount = useRef(false)
+
+  useEffect(() => {
+    onSaveRef.current = onSave
+  }, [onSave])
+
+  useEffect(() => {
+    if (!didMount.current) {
+      didMount.current = true
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      void onSaveRef.current(draft)
+    }, 650)
+
+    return () => window.clearTimeout(timer)
+  }, [draft])
 
   return (
     <div className="page-stack settings-page">
@@ -44,8 +64,25 @@ export function SettingsPage({
               min={0}
               max={40}
               type="number"
-              value={draft.newWordsPerDay}
-              onChange={(event) => setDraft((current) => ({ ...current, newWordsPerDay: Number(event.target.value) }))}
+              value={newWordsInput}
+              onChange={(event) => {
+                const value = event.target.value
+                setNewWordsInput(value)
+                if (value === '') return
+                const nextValue = Math.min(40, Math.max(0, Number(value)))
+                if (Number.isFinite(nextValue)) {
+                  setDraft((current) => ({ ...current, newWordsPerDay: nextValue }))
+                }
+              }}
+              onBlur={() => {
+                if (newWordsInput === '') {
+                  setNewWordsInput(String(draft.newWordsPerDay))
+                  return
+                }
+                const nextValue = Math.min(40, Math.max(0, Number(newWordsInput)))
+                setNewWordsInput(String(nextValue))
+                setDraft((current) => ({ ...current, newWordsPerDay: nextValue }))
+              }}
             />
           </label>
           <label>
@@ -173,10 +210,7 @@ export function SettingsPage({
         </div>
       </section>
 
-      <button className="primary-action sticky-save" onClick={() => onSave(draft)}>
-        <Save size={19} />
-        {busyLabel || '保存设置'}
-      </button>
+      <p className="autosave-status" aria-live="polite">{busyLabel || '自动保存'}</p>
     </div>
   )
 }
