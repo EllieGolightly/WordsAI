@@ -173,3 +173,62 @@ export type LibraryWord = WordEntry & {
   lapses?: number
   stage?: CardStage
 }
+
+export const LOCAL_BACKUP_SNAPSHOT_VERSION = 1
+
+export type LocalBackupSettings = Omit<AppSettings, 'aiApiKey'> & {
+  aiApiKey?: ''
+}
+
+export type LocalBackupSnapshotV1 = {
+  version: typeof LOCAL_BACKUP_SNAPSHOT_VERSION
+  createdAt: string
+  summary: {
+    wordsCount: number
+    cardsCount: number
+    reviewLogsCount: number
+    dailyPlansCount: number
+    aiContentsCount: number
+  }
+  data: {
+    words: WordEntry[]
+    cards: CardRecord[]
+    reviewLogs: ReviewLog[]
+    dailyPlans: DailyPlan[]
+    aiContents: AiContent[]
+    settings: LocalBackupSettings[]
+  }
+}
+
+export type LocalBackupSnapshotMeta = LocalBackupSnapshotV1['summary'] & {
+  version: LocalBackupSnapshotV1['version']
+  createdAt: string
+  sizeBytes: number
+}
+
+export type LocalDataCounts = {
+  words: number
+  cards: number
+  reviewLogs: number
+  dailyPlans: number
+  aiContents: number
+  settings: number
+}
+
+export type ExportReminderState = {
+  due: boolean
+  lastExportedAt?: string
+  lastReminderAt?: string
+  nextReminderAt: string
+}
+
+export type LocalStorageDiagnostics = {
+  origin: string
+  indexedDbAvailable: boolean
+  indexedDbError?: string
+  counts: LocalDataCounts
+  hasLearningData: boolean
+  snapshot?: LocalBackupSnapshotMeta
+  snapshotWriteError?: string
+  exportReminder: ExportReminderState
+}

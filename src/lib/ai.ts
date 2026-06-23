@@ -1,6 +1,6 @@
 import type { AiContentPayload, AiGeneratedWord, AppSettings, TodaySnapshot, WordEntry } from './types'
 
-export const PROMPT_VERSION = 'v2'
+export const PROMPT_VERSION = 'v3'
 
 type ChatCompletionResponse = {
   choices?: Array<{
@@ -140,20 +140,20 @@ export const generateAiSummary = async (
     wrong_words: formatSummaryWords(snapshot.wrongWords),
   }
 
-  const prompt = `你是一个关心用户学习状态的助手，语气自然，不浮夸。
+  const prompt = `你是一个熟悉用户学习节奏的英语复盘助手，语气自然、具体、不浮夸。
 
-根据以下学习数据，写一段100-150字的中文学习小结：
+根据以下学习数据，写一段可以直接显示在手机首页的中文学习小结：
 - 今日新词：${payload.new_words}
 - 复习词：${payload.review_words}
 - 答对：${payload.correct}，答错：${payload.wrong}
 - 错误词列表：${payload.wrong_words}
 
 要求：
-1. 简要说今天记住了多少、漏掉了哪几个（直接点名）
-2. 如果错误词有规律（比如都是动词、都是长词），点出来
-3. 最后一句话是真实的提醒或观察，不要程式化鼓励，语气像一个认识user的人，不是机器
-4. 口语化，不要分点，写成自然段落
-5. 不超过150字
+1. 只写一个自然段，90-150字，不要标题、列表、Markdown、emoji。
+2. 直接点名今天漏掉的词；没有错误词时，说清楚今天主要完成了什么。
+3. 如果错误词有规律，比如词性、长度、抽象含义、相近主题，请点出来。
+4. 最后给明天的一个具体优先级，不要说“继续加油”“保持努力”这类空泛鼓励。
+5. 语气像一个认识用户的学习伙伴，不要报告腔，不要自称 AI。
 
 输出严格 JSON，不要输出 markdown，不要额外解释。字段要求：
 {

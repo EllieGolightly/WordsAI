@@ -17,12 +17,7 @@ export function TodayPage({
   const remainingCount = today.newWords.length + today.dueWords.length + today.weakWords.length
   const target = Math.max(today.completedTodayCount + remainingCount, 1)
   const completionRate = Math.min(100, Math.round((today.completedTodayCount / target) * 100))
-  const rememberRate =
-    today.completedTodayCount === 0 ? 0 : Math.round((today.rememberedTodayCount / today.completedTodayCount) * 100)
-  const summaryText =
-    today.completedTodayCount === 0
-      ? `新词 ${today.newWords.length} 个，复习 ${today.dueWords.length} 个。`
-      : `完成 ${today.completedTodayCount} 次复习，记住率 ${rememberRate}%。明日优先复习到期词。`
+  const summaryText = summaryPayload?.summaryText.trim()
 
   return (
     <div className="page-stack today-page">
@@ -52,7 +47,7 @@ export function TodayPage({
         </button>
       </section>
 
-      {summaryPayload ? (
+      {summaryText ? (
         <section className="summary-panel">
           <div className="section-title">
             <h3>今日小结</h3>

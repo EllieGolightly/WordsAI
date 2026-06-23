@@ -1,10 +1,22 @@
-import { Database, Download, Import, KeyRound, TestTube2, Vault } from 'lucide-react'
+import { Database, Download, Import, KeyRound, RotateCcw, TestTube2, Vault } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import type { AppSettings } from '../lib/types'
+import type { AppSettings, LocalStorageDiagnostics } from '../lib/types'
+
+const formatDateTime = (value?: string) => {
+  if (!value) return '暂无'
+  return new Date(value).toLocaleString()
+}
+
+const formatBytes = (value?: number) => {
+  if (!value) return '0 KB'
+  if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KB`
+  return `${(value / 1024 / 1024).toFixed(1)} MB`
+}
 
 export function SettingsPage({
   settings,
   storageInfo,
+  storageDiagnostics,
   summaryPreview,
   busyLabel,
   aiTestResult,
@@ -13,9 +25,12 @@ export function SettingsPage({
   onExport,
   onImport,
   onRequestStorage,
+  onRestoreSnapshot,
+  onSnoozeExportReminder,
 }: {
   settings: AppSettings
   storageInfo: { supported: boolean; persisted: boolean }
+  storageDiagnostics: LocalStorageDiagnostics | null
   summaryPreview: string
   busyLabel: string
   aiTestResult: { status: 'idle' | 'testing' | 'ok' | 'error'; message: string }
@@ -24,6 +39,8 @@ export function SettingsPage({
   onExport: () => void
   onImport: (file?: File | null) => void
   onRequestStorage: () => void
+  onRestoreSnapshot: () => void
+  onSnoozeExportReminder: () => void
 }) {
   const [draft, setDraft] = useState(settings)
   const [newWordsInput, setNewWordsInput] = useState(String(settings.newWordsPerDay))
@@ -175,11 +192,11 @@ export function SettingsPage({
       <section className="panel-section">
         <div className="section-title">
           <div>
-            <p className="eyebrow">Notion Markdown</p>
+            <p className="eyebrow">Daily Summary</p>
             <h3>小结预览</h3>
           </div>
         </div>
-        <pre className="markdown-preview">{summaryPreview || '# 今日小结\n\n完成背词后会在这里预览。'}</pre>
+        <p className="summary-preview">{summaryPreview || '完成背词后会在这里预览今日小结。'}</p>
       </section>
 
       <section className="panel-section">
@@ -191,8 +208,56 @@ export function SettingsPage({
           <Database size={20} />
         </div>
         <p className="storage-copy">
-          {storageInfo.supported ? (storageInfo.persisted ? '浏览器已尽量保留本地数据。' : '可申请持久化，降低浏览器清理风险。') : '当前浏览器不支持持久化检测。'}
+          {storageInfo.supported
+            ? storageInfo.persisted
+              ? '浏览器已授予持久化，但 iOS Safari 仍可能在存储压力下清理站点数据。'
+              : '可尝试申请持久化；在 iOS Safari 上它不是可靠保险，定期导出 JSON 才是最终兜底。'
+            : '当前浏览器不支持持久化检测，请依赖本地快照和 JSON 备份。'}
         </p>
+        {storageDiagnostics ? (
+          <div className="storage-diagnostics">
+            <div>
+              <span>当前域名</span>
+              <strong>{storageDiagnostics.origin}</strong>
+            </div>
+            <div>
+              <span>IndexedDB</span>
+              <strong>{storageDiagnostics.indexedDbAvailable ? '可用' : '异常'}</strong>
+            </div>
+            <div>
+              <span>卡片 / 复习</span>
+              <strong>
+                {storageDiagnostics.counts.cards} / {storageDiagnostics.counts.reviewLogs}
+              </strong>
+            </div>
+            <div>
+              <span>计划 / AI 小结</span>
+              <strong>
+                {storageDiagnostics.counts.dailyPlans} / {storageDiagnostics.counts.aiContents}
+              </strong>
+            </div>
+            <div>
+              <span>最近快照</span>
+              <strong>{formatDateTime(storageDiagnostics.snapshot?.createdAt)}</strong>
+            </div>
+            <div>
+              <span>快照版本 / 大小</span>
+              <strong>
+                {storageDiagnostics.snapshot ? `v${storageDiagnostics.snapshot.version} / ${formatBytes(storageDiagnostics.snapshot.sizeBytes)}` : '暂无'}
+              </strong>
+            </div>
+            <div>
+              <span>最近导出</span>
+              <strong>{formatDateTime(storageDiagnostics.exportReminder.lastExportedAt)}</strong>
+            </div>
+            <div>
+              <span>导出提醒</span>
+              <strong>{storageDiagnostics.exportReminder.due ? '建议导出' : formatDateTime(storageDiagnostics.exportReminder.nextReminderAt)}</strong>
+            </div>
+          </div>
+        ) : null}
+        {storageDiagnostics?.indexedDbError ? <p className="storage-warning">{storageDiagnostics.indexedDbError}</p> : null}
+        {storageDiagnostics?.snapshotWriteError ? <p className="storage-warning">{storageDiagnostics.snapshotWriteError}</p> : null}
         <div className="button-row">
           <button className="secondary-action" onClick={onRequestStorage}>
             <Vault size={17} />
@@ -207,6 +272,17 @@ export function SettingsPage({
             导入
             <input type="file" accept="application/json" onChange={(event) => void onImport(event.target.files?.[0])} />
           </label>
+          {storageDiagnostics?.snapshot ? (
+            <button className="secondary-action" onClick={onRestoreSnapshot}>
+              <RotateCcw size={17} />
+              恢复快照
+            </button>
+          ) : null}
+          {storageDiagnostics?.exportReminder.due ? (
+            <button className="secondary-action" onClick={onSnoozeExportReminder}>
+              稍后提醒
+            </button>
+          ) : null}
         </div>
       </section>
 

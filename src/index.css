@@ -163,6 +163,78 @@ select {
   font-weight: 800;
 }
 
+.backup-banner {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 18px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface-strong);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.backup-banner button {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 252, 247, 0.58);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.recovery-screen {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: var(--bg);
+}
+
+.recovery-panel {
+  width: min(100%, 460px);
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow);
+}
+
+.recovery-panel h1 {
+  font-size: 24px;
+  line-height: 1.15;
+  color: var(--ink-strong);
+}
+
+.recovery-panel p {
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.storage-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.storage-metrics span {
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--ink);
+  text-align: center;
+  font-size: 13px;
+}
+
 .page-viewport {
   min-height: 0;
   overflow-y: auto;
@@ -933,8 +1005,54 @@ select {
   font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+.summary-preview {
+  margin-top: 12px;
+  border-radius: var(--radius);
+  background: rgba(255, 252, 247, 0.5);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  padding: 12px;
+  line-height: 1.75;
+}
+
 .storage-copy {
   margin: 10px 0 12px;
+}
+
+.storage-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.storage-diagnostics div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+
+.storage-diagnostics span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.storage-diagnostics strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.storage-warning {
+  margin: 10px 0;
+  color: #8a5f51;
+  line-height: 1.6;
 }
 
 .file-trigger {

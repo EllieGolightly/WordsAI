@@ -15,7 +15,13 @@ import type {
   CardRecord,
   DailyPlan,
   DifficultWordStat,
+  ExportReminderState,
   HeatmapDay,
+  LocalBackupSettings,
+  LocalBackupSnapshotMeta,
+  LocalBackupSnapshotV1,
+  LocalDataCounts,
+  LocalStorageDiagnostics,
   LibraryWord,
   RangeStats,
   ReviewDeckItem,
@@ -25,6 +31,18 @@ import type {
   TodaySnapshot,
   WordEntry,
 } from './types'
+import { LOCAL_BACKUP_SNAPSHOT_VERSION } from './types'
+
+const LOCAL_BACKUP_SNAPSHOT_KEY = 'wordsai:local-backup-snapshot:v1'
+const LOCAL_BACKUP_LAST_EXPORT_KEY = 'wordsai:last-json-export-at'
+const LOCAL_BACKUP_LAST_REMINDER_KEY = 'wordsai:last-json-export-reminder-at'
+const LOCAL_BACKUP_LAST_ERROR_KEY = 'wordsai:last-snapshot-error'
+const EXPORT_REMINDER_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000
+const SNAPSHOT_WRITE_DELAY_MS = 900
+const SNAPSHOT_SAFE_SIZE_BYTES = 5 * 1024 * 1024
+const seedWordIds = new Set(seedWords.map((word) => word.id))
+
+let snapshotTimer: number | undefined
 
 export const defaultSettings: AppSettings = {
   id: 'default',
@@ -67,6 +85,232 @@ const getReviewedWordIdsForDay = async (date = new Date()) => {
 
 const unique = <T,>(items: T[]) => [...new Set(items)]
 
+const getLocalStorageItem = (key: string) => {
+  try {
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+const setLocalStorageItem = (key: string, value: string) => {
+  window.localStorage.setItem(key, value)
+}
+
+const removeLocalStorageItem = (key: string) => {
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    // localStorage may be unavailable in some private browsing modes.
+  }
+}
+
+const toBytes = (value: string) => new Blob([value]).size
+
+const parseIsoTime = (value?: string) => {
+  if (!value) return 0
+  const time = new Date(value).getTime()
+  return Number.isFinite(time) ? time : 0
+}
+
+const sanitizeSettingsForBackup = (settings: AppSettings): LocalBackupSettings => {
+  return { ...settings, aiApiKey: '' }
+}
+
+const getCoreCounts = async (): Promise<LocalDataCounts> => {
+  const [words, cards, reviewLogs, dailyPlans, aiContents, settings] = await Promise.all([
+    db.words.count(),
+    db.cards.count(),
+    db.reviewLogs.count(),
+    db.dailyPlans.count(),
+    db.aiContents.count(),
+    db.settings.count(),
+  ])
+
+  return { words, cards, reviewLogs, dailyPlans, aiContents, settings }
+}
+
+const countsHaveLearningData = (counts: LocalDataCounts) =>
+  counts.cards + counts.reviewLogs + counts.dailyPlans + counts.aiContents > 0
+
+const getBackupWords = async () => {
+  const words = await db.words.toArray()
+  return words.filter(
+    (word) =>
+      !seedWordIds.has(word.id) ||
+      word.source === 'ai' ||
+      word.source === 'imported' ||
+      word.source === 'manual',
+  )
+}
+
+export const getLocalBackupSnapshot = (): LocalBackupSnapshotV1 | undefined => {
+  const raw = getLocalStorageItem(LOCAL_BACKUP_SNAPSHOT_KEY)
+  if (!raw) return undefined
+
+  try {
+    const snapshot = JSON.parse(raw) as LocalBackupSnapshotV1
+    if (snapshot.version !== LOCAL_BACKUP_SNAPSHOT_VERSION || !snapshot.data || !snapshot.summary) return undefined
+    return snapshot
+  } catch {
+    return undefined
+  }
+}
+
+const getLocalBackupSnapshotMeta = (): LocalBackupSnapshotMeta | undefined => {
+  const raw = getLocalStorageItem(LOCAL_BACKUP_SNAPSHOT_KEY)
+  if (!raw) return undefined
+
+  try {
+    const snapshot = JSON.parse(raw) as LocalBackupSnapshotV1
+    if (snapshot.version !== LOCAL_BACKUP_SNAPSHOT_VERSION || !snapshot.summary) return undefined
+    return {
+      ...snapshot.summary,
+      version: snapshot.version,
+      createdAt: snapshot.createdAt,
+      sizeBytes: toBytes(raw),
+    }
+  } catch {
+    return undefined
+  }
+}
+
+export const saveLocalBackupSnapshot = async () => {
+  const [words, cards, reviewLogs, dailyPlans, aiContents, settings] = await Promise.all([
+    getBackupWords(),
+    db.cards.toArray(),
+    db.reviewLogs.toArray(),
+    db.dailyPlans.toArray(),
+    db.aiContents.toArray(),
+    db.settings.toArray(),
+  ])
+
+  const snapshot: LocalBackupSnapshotV1 = {
+    version: LOCAL_BACKUP_SNAPSHOT_VERSION,
+    createdAt: new Date().toISOString(),
+    summary: {
+      wordsCount: words.length,
+      cardsCount: cards.length,
+      reviewLogsCount: reviewLogs.length,
+      dailyPlansCount: dailyPlans.length,
+      aiContentsCount: aiContents.length,
+    },
+    data: {
+      words,
+      cards,
+      reviewLogs,
+      dailyPlans,
+      aiContents,
+      settings: settings.map(sanitizeSettingsForBackup),
+    },
+  }
+
+  const serialized = JSON.stringify(snapshot)
+
+  if (toBytes(serialized) > SNAPSHOT_SAFE_SIZE_BYTES) {
+    setLocalStorageItem(LOCAL_BACKUP_LAST_ERROR_KEY, '本地快照超过 5MB 安全线，请导出 JSON 备份。')
+    return { saved: false, reason: 'size' as const }
+  }
+
+  try {
+    setLocalStorageItem(LOCAL_BACKUP_SNAPSHOT_KEY, serialized)
+    removeLocalStorageItem(LOCAL_BACKUP_LAST_ERROR_KEY)
+    return { saved: true as const, snapshot }
+  } catch {
+    try {
+      setLocalStorageItem(LOCAL_BACKUP_LAST_ERROR_KEY, '本地快照写入失败，请导出 JSON 备份。')
+    } catch {
+      // Ignore secondary failure.
+    }
+    return { saved: false, reason: 'quota' as const }
+  }
+}
+
+export const queueLocalBackupSnapshot = () => {
+  window.clearTimeout(snapshotTimer)
+  snapshotTimer = window.setTimeout(() => {
+    void saveLocalBackupSnapshot()
+  }, SNAPSHOT_WRITE_DELAY_MS)
+}
+
+export const restoreLocalBackupSnapshot = async () => {
+  const snapshot = getLocalBackupSnapshot()
+  if (!snapshot) throw new Error('没有可恢复的本地快照')
+
+  await initializeApp()
+  await db.transaction('rw', [db.words, db.cards, db.reviewLogs, db.dailyPlans, db.aiContents, db.settings], async () => {
+    if (snapshot.data.words.length) await db.words.bulkPut(snapshot.data.words)
+    if (snapshot.data.cards.length) await db.cards.bulkPut(snapshot.data.cards)
+    if (snapshot.data.reviewLogs.length) await db.reviewLogs.bulkPut(snapshot.data.reviewLogs)
+    if (snapshot.data.dailyPlans.length) await db.dailyPlans.bulkPut(snapshot.data.dailyPlans)
+    if (snapshot.data.aiContents.length) await db.aiContents.bulkPut(snapshot.data.aiContents)
+    if (snapshot.data.settings.length) {
+      const existingSettings = await getSettings()
+      await db.settings.bulkPut(
+        snapshot.data.settings.map((settings) => ({
+          ...defaultSettings,
+          ...settings,
+          aiApiKey: existingSettings.aiApiKey,
+          id: 'default' as const,
+        })),
+      )
+    }
+  })
+  await saveLocalBackupSnapshot()
+}
+
+const getExportReminderState = (): ExportReminderState => {
+  const lastExportedAt = getLocalStorageItem(LOCAL_BACKUP_LAST_EXPORT_KEY) ?? undefined
+  const lastReminderAt = getLocalStorageItem(LOCAL_BACKUP_LAST_REMINDER_KEY) ?? undefined
+  const lastActivity = Math.max(parseIsoTime(lastExportedAt), parseIsoTime(lastReminderAt))
+  const now = Date.now()
+  const nextReminderTime = lastActivity > 0 ? lastActivity + EXPORT_REMINDER_INTERVAL_MS : now
+
+  return {
+    due: lastActivity === 0 || now >= nextReminderTime,
+    lastExportedAt,
+    lastReminderAt,
+    nextReminderAt: new Date(nextReminderTime).toISOString(),
+  }
+}
+
+export const markJsonExported = () => {
+  setLocalStorageItem(LOCAL_BACKUP_LAST_EXPORT_KEY, new Date().toISOString())
+}
+
+export const snoozeJsonExportReminder = () => {
+  setLocalStorageItem(LOCAL_BACKUP_LAST_REMINDER_KEY, new Date().toISOString())
+}
+
+export const getLocalStorageDiagnostics = async (): Promise<LocalStorageDiagnostics> => {
+  const snapshot = getLocalBackupSnapshotMeta()
+  const snapshotWriteError = getLocalStorageItem(LOCAL_BACKUP_LAST_ERROR_KEY) ?? undefined
+
+  try {
+    const counts = await getCoreCounts()
+    return {
+      origin: window.location.origin,
+      indexedDbAvailable: true,
+      counts,
+      hasLearningData: countsHaveLearningData(counts),
+      snapshot,
+      snapshotWriteError,
+      exportReminder: getExportReminderState(),
+    }
+  } catch (error) {
+    return {
+      origin: window.location.origin,
+      indexedDbAvailable: false,
+      indexedDbError: error instanceof Error ? error.message : 'IndexedDB 无法打开',
+      counts: { words: 0, cards: 0, reviewLogs: 0, dailyPlans: 0, aiContents: 0, settings: 0 },
+      hasLearningData: false,
+      snapshot,
+      snapshotWriteError,
+      exportReminder: getExportReminderState(),
+    }
+  }
+}
+
 export const initializeApp = async () => {
   const wordsCount = await db.words.count()
   if (wordsCount === 0) {
@@ -85,6 +329,7 @@ export const saveSettings = async (partial: Partial<AppSettings>) => {
   const settings = await getSettings()
   const nextSettings = { ...defaultSettings, ...settings, ...partial, id: 'default' as const }
   await db.settings.put(nextSettings)
+  queueLocalBackupSnapshot()
   return nextSettings
 }
 
@@ -201,6 +446,7 @@ const createNewWordBatch = async (
 
       if (normalized.length > 0) {
         await db.words.bulkPut(normalized)
+        queueLocalBackupSnapshot()
         generatedWordIds = normalized.map((word) => word.id)
         source = localNewWordIds.length > generatedWordIds.length ? 'mixed' : 'ai'
       }
@@ -247,6 +493,7 @@ export const ensureTodayPlan = async (date = new Date()) => {
     }
 
     await db.dailyPlans.put(plan)
+    queueLocalBackupSnapshot()
     return plan
   }
 
@@ -261,6 +508,7 @@ export const ensureTodayPlan = async (date = new Date()) => {
     generatedAt: new Date().toISOString(),
   }
   await db.dailyPlans.put(plan)
+  queueLocalBackupSnapshot()
   return plan
 }
 
@@ -290,6 +538,7 @@ export const extendTodayPlan = async (date = new Date()) => {
   }
 
   await db.dailyPlans.put(nextPlan)
+  queueLocalBackupSnapshot()
   return {
     plan: nextPlan,
     addedCount: batch.newWordIds.length,
@@ -332,6 +581,7 @@ export const syncTodayNewWordTarget = async (date = new Date()) => {
   }
 
   await db.dailyPlans.put(nextPlan)
+  queueLocalBackupSnapshot()
 
   return {
     plan: nextPlan,
@@ -465,6 +715,7 @@ export const submitReview = async (wordId: string, grade: ReviewGrade, date = ne
     await db.cards.put(nextCard)
     await db.reviewLogs.add(log)
   })
+  queueLocalBackupSnapshot()
 
   return nextCard
 }
@@ -482,6 +733,7 @@ export const ensureWordExamples = async (wordId: string) => {
     ...word,
     examples,
   })
+  queueLocalBackupSnapshot()
 
   return examples
 }
@@ -511,6 +763,7 @@ export const undoLastReview = async () => {
     }
     await db.reviewLogs.delete(lastLog.id!)
   })
+  queueLocalBackupSnapshot()
 
   return true
 }
@@ -542,6 +795,7 @@ export const generateTodaySummary = async (date = new Date()) => {
   const id = await db.aiContents.add(record)
   const plan = await ensureTodayPlan(date)
   await db.dailyPlans.put({ ...plan, aiContentId: id })
+  queueLocalBackupSnapshot()
 
   return { ...record, id }
 }
@@ -712,6 +966,7 @@ export const addWordToToday = async (wordId: string, date = new Date()) => {
     source: plan.source === 'ai' ? ('mixed' as const) : plan.source ?? ('local' as const),
   }
   await db.dailyPlans.put(nextPlan)
+  queueLocalBackupSnapshot()
   return nextPlan
 }
 
@@ -724,6 +979,8 @@ export const exportProgress = async () => {
     db.aiContents.toArray(),
     db.settings.toArray(),
   ])
+
+  markJsonExported()
 
   return {
     exportedAt: new Date().toISOString(),
@@ -753,6 +1010,7 @@ export const importProgress = async (fileText: string) => {
   if (data.dailyPlans?.length) await db.dailyPlans.bulkPut(data.dailyPlans)
   if (data.aiContents?.length) await db.aiContents.bulkPut(data.aiContents)
   if (data.settings?.length) await db.settings.bulkPut(data.settings)
+  queueLocalBackupSnapshot()
 }
 
 export const getPersistentStorageSupport = async () => {
